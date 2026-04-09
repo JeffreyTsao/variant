@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Liquid biopsy variant tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f8f8f6;
+    color: #1a1a1a;
+    min-height: 100vh;
+    padding: 2rem;
+  }
+  h1 { font-size: 22px; font-weight: 500; margin-bottom: 0.4rem; color: #1a1a1a; }
+  .subtitle { font-size: 14px; color: #888; margin-bottom: 2rem; }
+  .upload-area {
+    border: 1.5px dashed #ccc;
+    border-radius: 12px;
+    padding: 3rem 2rem;
+    text-align: center;
+    background: white;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    max-width: 560px;
+    margin: 0 auto 2rem;
+  }
+  .upload-area:hover { border-color: #7F77DD; background: #EEEDFE22; }
+  .upload-area.drag-over { border-color: #534AB7; background: #EEEDFE44; }
+  .upload-icon {
+    width: 48px; height: 48px;
+    margin: 0 auto 1rem;
+    background: #EEEDFE;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .upload-icon svg { width: 24px; height: 24px; }
+  .upload-label { font-size: 15px; font-weight: 500; margin-bottom: 0.4rem; }
+  .upload-hint { font-size: 13px; color: #888; }
+  #file-input { display: none; }
+  .btn {
+    display: inline-block;
+    margin-top: 1rem;
+    padding: 8px 20px;
+    border: 0.5px solid #ccc;
+    border-radius: 8px;
+    background: white;
+    font-size: 14px;
+    cursor: pointer;
+    color: #1a1a1a;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: #f0eff8; border-color: #7F77DD; }
+  #status { text-align: center; font-size: 14px; color: #534AB7; margin-bottom: 1rem; min-height: 20px; }
+  #chart-section { display: none; }
+  .chart-card {
+    background: white;
+    border-radius: 12px;
+    border: 0.5px solid #e0dfd6;
+    padding: 1.5rem;
+  }
+  .chart-title { font-size: 16px; font-weight: 500; margin-bottom: 0.25rem; }
+  .chart-sub { font-size: 13px; color: #888; margin-bottom: 1.5rem; }
+  .charts-row {
+    display: flex;
+    align-items: stretch;
+  }
+  .hist-wrap {
+    position: relative;
+    width: 150px;
+    flex-shrink: 0;
+    height: 480px;
+  }
+  .line-wrap {
+    position: relative;
+    flex: 1;
+    height: 480px;
+    min-width: 0;
+  }
+  .stats-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .stat-card {
+    background: #f8f8f6;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    flex: 1;
+    min-width: 120px;
+  }
+  .stat-label { font-size: 12px; color: #888; margin-bottom: 4px; }
+  .stat-value { font-size: 20px; font-weight: 500; }
+  .error { color: #A32D2D; font-size: 14px; }
+</style>
+</head>
+<body>
+<H1>Liquid biopsy variant tracker</H1>
+<p class="subtitle">Upload an Excel file to visualize allele ratios per sheet by target</p>
+
+<div class="upload-area" id="drop-zone">
+  <div class="upload-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#534AB7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14,2 14,8 20,8"/>
+      <line x1="12" y1="18" x2="12" y2="12"/>
+      <polyline points="9,15 12,12 15,15"/>
+    </svg>
+  </div>
+  <div class="upload-label">Drop your Excel file here</div>
+  <div class="upload-hint">.xlsx or .xls files supported</div>
+  <button class="btn" onclick="document.getElementById('file-input').click()">Browse file</button>
+  <input type="file" id="file-input" accept=".xlsx,.xls">
+</div>
+
+<div id="status"></div>
+<div id="chart-section">
+  <div class="stats-row" id="stats-row"></div>
+  <div class="chart-card">
+    <div class="chart-title">Liquid biopsy variant tracker</div>
+    <div class="chart-sub" id="chart-sub"></div>
+    <div class="charts-row">
+      <div class="hist-wrap"><canvas id="histChart"></canvas></div>
+      <div class="line-wrap"><canvas id="myChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PALETTE = [
+  '#534AB7','#1D9E75','#D85A30','#378ADD','#D4537E',
+  '#639922','#BA7517','#3C3489','#0F6E56','#993C1D',
+  '#185FA5','#993556','#3B6D11','#854F0B','#A32D2D',
+  '#7F77DD','#5DCAA5','#F0997B','#85B7EB','#ED93B1'
+];
+
+let chartInstance = null;
+let histInstance = null;
+
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const status = document.getElementById('status');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) processFile(file);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) processFile(e.target.files[0]);
+});
+
+function setStatus(msg, isError) {
+  status.textContent = msg;
+  status.className = isError ? 'error' : '';
+}
+
+function processFile(file) {
+  setStatus('Reading file…');
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      buildChart(wb, file.name);
+    } catch (err) {
+      setStatus('Error reading file: ' + err.message, true);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function buildChart(wb, filename) {
+  // Sort sheet names
+  const sheetNames = [...wb.SheetNames].sort((a, b) => {
+    const na = isNaN(a) ? a : Number(a);
+    const nb = isNaN(b) ? b : Number(b);
+    if (typeof na === 'number' && typeof nb === 'number') return na - nb;
+    return String(a).localeCompare(String(b));
+  });
+  const sheetCount = sheetNames.length;
+
+  // Build an index from original sheet name -> sorted index
+  const sheetIndexMap = {};
+  sheetNames.forEach((name, i) => { sheetIndexMap[name] = i; });
+
+  const lineMap = {};
+  const allCol1Values = [];
+  const latestSheetName = sheetNames[sheetNames.length - 1];
+  const latestCol1Values = [];
+
+  wb.SheetNames.forEach(name => {
+    const sortedIdx = sheetIndexMap[name];
+    const ws = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+    if (rows.length < 2) return;
+
+    const dataRows = rows.slice(1);
+    dataRows.forEach(row => {
+      const col1 = row[0];
+      const col2 = row[1];
+      const col3 = row[2];
+      const col4 = row[3];
+      if (col1 == null || col2 == null) return;
+
+      const yVal = parseFloat(col1);
+      if (isNaN(yVal)) return;
+
+      allCol1Values.push(yVal);
+      if (name === latestSheetName) latestCol1Values.push(yVal);
+
+      const legendKey = String(col4 != null ? col4 : '') + ' ' + String(col3 != null ? col3 : '');
+      const seriesKey = String(col2) + '||' + legendKey;
+
+      if (!lineMap[seriesKey]) {
+        lineMap[seriesKey] = { label: legendKey.trim() || String(col2), points: {} };
+      }
+      if (lineMap[seriesKey].points[sortedIdx] == null) {
+        lineMap[seriesKey].points[sortedIdx] = yVal;
+      }
+    });
+  });
+
+  const seriesKeys = Object.keys(lineMap);
+  if (seriesKeys.length === 0) {
+    setStatus('No data found. Check that columns 1–4 exist with numeric values in column 1.', true);
+    return;
+  }
+
+  // Shared Y range
+  const yMin = Math.min(...allCol1Values);
+  const yMax = Math.max(...allCol1Values);
+  const yPad = (yMax - yMin) * 0.05 || 0.05;
+  const sharedYMin = Math.max(0, yMin - yPad);
+  const sharedYMax = yMax + yPad;
+
+  // Histogram bins
+  const numBins = 50;
+  const binSize = (sharedYMax - sharedYMin) / numBins;
+  const bins = Array(numBins).fill(0);
+  const binCenters = Array.from({ length: numBins }, (_, i) => sharedYMin + (i + 0.5) * binSize);
+
+  allCol1Values.forEach(v => {
+    let idx = Math.floor((v - sharedYMin) / binSize);
+    if (idx >= numBins) idx = numBins - 1;
+    if (idx < 0) idx = 0;
+    bins[idx]++;
+  });
+
+  // Latest-sheet histogram bins
+  const latestBins = Array(numBins).fill(0);
+  latestCol1Values.forEach(v => {
+    let idx = Math.floor((v - sharedYMin) / binSize);
+    if (idx >= numBins) idx = numBins - 1;
+    if (idx < 0) idx = 0;
+    latestBins[idx]++;
+  });
+
+  // Normalize both histograms so totals sum to 1
+  const allTotal = bins.reduce((a, b) => a + b, 0) || 1;
+  const latestTotal = latestBins.reduce((a, b) => a + b, 0) || 1;
+  const binsNorm = bins.map(v => v / allTotal);
+  const latestBinsNorm = latestBins.map(v => v / latestTotal);
+
+  // Stats
+  document.getElementById('stats-row').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Sheets</div><div class="stat-value">${sheetCount}</div></div>
+    <div class="stat-card"><div class="stat-label">Unique targets</div><div class="stat-value">${seriesKeys.length}</div></div>
+    <div class="stat-card"><div class="stat-label">File</div><div class="stat-value" style="font-size:14px;word-break:break-all">${filename}</div></div>
+  `;
+  document.getElementById('chart-sub').innerHTML =
+    `<span style="color:#888888;font-weight:400">&#9644; All sheets</span> &nbsp; <span style="color:#D85A30;font-weight:400">&#9644; <span id="latest-sheet-label">latest sheet</span></span>`;
+
+  document.getElementById('latest-sheet-label').textContent = latestSheetName;
+
+  if (chartInstance) chartInstance.destroy();
+  if (histInstance) histInstance.destroy();
+
+  // ── Alignment plugin ──────────────────────────────────────────────────────
+  // Copies the line chart's y-axis tick values and pixel positions into the
+  // histogram so both plot areas are pixel-identical.
+  let lineChartRef = null;
+
+  const alignHistPlugin = {
+    id: 'alignHist',
+    beforeLayout(chart) {
+      if (!lineChartRef) return;
+      const src = lineChartRef.scales.y;
+      const dst = chart.scales.y;
+      // Mirror the exact min/max the line chart settled on after its own layout
+      dst.options.min = src.min;
+      dst.options.max = src.max;
+    },
+    afterLayout(chart) {
+      if (!lineChartRef) return;
+      const src = lineChartRef.scales.y;
+      const dst = chart.scales.y;
+      // Force identical plot-area pixel bounds
+      dst.top    = src.top;
+      dst.bottom = src.bottom;
+      dst.height = src.height;
+      // Copy tick values so labels match exactly
+      dst.ticks = src.ticks.map(t => ({ ...t }));
+    }
+  };
+
+  // Build line chart first so histogram can read its layout
+  const labels = sheetNames;
+  const datasets = seriesKeys.map((key, i) => {
+    const series = lineMap[key];
+    const dataArr = Array.from({ length: sheetCount }, (_, idx) => {
+      const v = series.points[idx];
+      return v != null ? v : null;
+    });
+    const color = PALETTE[i % PALETTE.length];
+    return {
+      label: series.label,
+      data: dataArr,
+      borderColor: color,
+      backgroundColor: color + '22',
+      borderWidth: 2,
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      tension: 0.3,
+      spanGaps: false
+    };
+  });
+
+  const ctx = document.getElementById('myChart').getContext('2d');
+
+  // Plugin that, after the line chart finishes layout, triggers a histogram update
+  const triggerHistAlignPlugin = {
+    id: 'triggerHistAlign',
+    afterLayout(chart) {
+      if (histInstance) {
+        histInstance.update('none');
+      }
+    }
+  };
+
+  chartInstance = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'nearest', intersect: true },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: () => '',
+            label: c => ` ${c.dataset.label}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Sheet (sample ID)', font: { size: 13 } },
+          ticks: { font: { size: 11 }, maxRotation: 45 }
+        },
+        y: {
+          min: sharedYMin,
+          max: sharedYMax,
+          title: { display: true, text: 'Allele ratio', font: { size: 12 } },
+          ticks: { font: { size: 11 } },
+          grid: { color: '#e0dfd650' }
+        }
+      }
+    },
+    plugins: [triggerHistAlignPlugin]
+  });
+
+  lineChartRef = chartInstance;
+
+  // ── Histogram ─────────────────────────────────────────────────────────────
+  const histCtx = document.getElementById('histChart').getContext('2d');
+  histInstance = new Chart(histCtx, {
+    type: 'bar',
+    data: {
+      labels: binCenters,
+      datasets: [
+        {
+          label: 'All sheets',
+          data: binsNorm,
+          backgroundColor: '#88888833',
+          borderColor: '#888888',
+          borderWidth: 1,
+          barPercentage: 1.0,
+          categoryPercentage: 1.0
+        },
+        {
+          label: latestSheetName,
+          data: latestBinsNorm,
+          backgroundColor: '#D85A3066',
+          borderColor: '#D85A30',
+          borderWidth: 1,
+          barPercentage: 1.0,
+          categoryPercentage: 1.0
+        }
+      ]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: items => `~${parseFloat(items[0].label).toFixed(3)}`,
+            label: item => `${item.dataset.label}: ${item.parsed.x.toFixed(3)}`
+          }
+        }
+      },
+      scales: {
+        y: {
+          type: 'linear',
+          min: sharedYMin,
+          max: sharedYMax,
+          ticks: { display: true, font: { size: 11 } },
+          grid: { color: '#e0dfd650' },
+          title: { display: false }
+        },
+        x: {
+          reverse: true,
+          position: 'bottom',
+          ticks: { font: { size: 10 }, maxTicksLimit: 4 },
+          grid: { color: '#e0dfd650' },
+          title: { display: true, text: 'Proportion', font: { size: 11 }, padding: { top: 4 } }
+        }
+      }
+    },
+    plugins: [alignHistPlugin]
+  });
+
+  document.getElementById('chart-section').style.display = 'block';
+  setStatus('');
+
+  // Final sync after both charts have rendered
+  requestAnimationFrame(() => {
+    histInstance.update('none');
+  });
+}
+</script>
+</body>
+</html>
