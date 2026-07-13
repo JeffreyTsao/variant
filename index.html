@@ -196,18 +196,41 @@ function buildChart(wb, filename) {
   const latestSheetName = sheetNames[sheetNames.length - 1];
   const latestCol1Values = [];
 
+  // Header names we look for in each sheet. Matching is case-insensitive and
+  // ignores surrounding whitespace, but the column ORDER may differ from
+  // sheet to sheet since we look each one up by name.
+  const HEADER_RATIO = 'column1.alleleratio';
+  const HEADER_TARGET = 'column1.target.id';
+  const HEADER_CHR = 'column1.target.chr';
+  const HEADER_POSITION = 'column1.target.position';
+
+  const normalizeHeader = h => String(h == null ? '' : h).trim().toLowerCase();
+
+  let missingHeaderSheets = [];
+
   wb.SheetNames.forEach(name => {
     const sortedIdx = sheetIndexMap[name];
     const ws = wb.Sheets[name];
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
     if (rows.length < 2) return;
 
+    const headerRow = rows[0].map(normalizeHeader);
+    const ratioIdx = headerRow.indexOf(HEADER_RATIO);
+    const targetIdx = headerRow.indexOf(HEADER_TARGET);
+    const chrIdx = headerRow.indexOf(HEADER_CHR);
+    const positionIdx = headerRow.indexOf(HEADER_POSITION);
+
+    if (ratioIdx === -1 || targetIdx === -1) {
+      missingHeaderSheets.push(name);
+      return;
+    }
+
     const dataRows = rows.slice(1);
     dataRows.forEach(row => {
-      const col1 = row[0];
-      const col2 = row[1];
-      const col3 = row[2];
-      const col4 = row[3];
+      const col1 = row[ratioIdx];
+      const col2 = row[targetIdx];
+      const col3 = chrIdx !== -1 ? row[chrIdx] : null;
+      const col4 = positionIdx !== -1 ? row[positionIdx] : null;
       if (col1 == null || col2 == null) return;
 
       const yVal = parseFloat(col1);
@@ -230,8 +253,12 @@ function buildChart(wb, filename) {
 
   const seriesKeys = Object.keys(lineMap);
   if (seriesKeys.length === 0) {
-    setStatus('No data found. Check that columns 1–4 exist with numeric values in column 1.', true);
+    setStatus('No data found. Check that each sheet has a header row with "Column1.alleleRatio" and "Column1.target.id" columns.', true);
     return;
+  }
+
+  if (missingHeaderSheets.length > 0) {
+    setStatus(`Warning: skipped sheet(s) missing required headers: ${missingHeaderSheets.join(', ')}`, true);
   }
 
   // Shared Y range
@@ -280,8 +307,8 @@ function buildChart(wb, filename) {
 
   document.getElementById('latest-sheet-label').textContent = latestSheetName;
 
-  if (chartInstance) chartInstance.destroy();
-  if (histInstance) histInstance.destroy();
+  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+  if (histInstance) { histInstance.destroy(); histInstance = null; }
 
   // ── Alignment plugin ──────────────────────────────────────────────────────
   // Copies the line chart's y-axis tick values and pixel positions into the
@@ -444,11 +471,11 @@ function buildChart(wb, filename) {
   });
 
   document.getElementById('chart-section').style.display = 'block';
-  setStatus('');
+  if (missingHeaderSheets.length === 0) setStatus('');
 
   // Final sync after both charts have rendered
   requestAnimationFrame(() => {
-    histInstance.update('none');
+    if (histInstance) histInstance.update('none');
   });
 }
 </script>
